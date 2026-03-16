@@ -1,0 +1,23 @@
+{
+    "crosshair": {
+        "enabled": true,
+        "color": "#FF0000",
+        "size": 10,
+        "glow_enabled": true,
+        "glow_color": "#FF0000",
+        "glow_radius": 3
+    },
+    "upload_block": {
+        "enabled": false,
+        "shortcut": "F10",
+        "notification_pos": "top_left"
+    },
+    "ai_chat": {
+        "enabled": false,
+        "chroma_installed": false,
+        "db_initialized": false
+    },
+    "hotkeys": {
+        "crosshair": "F9"
+    }
+}

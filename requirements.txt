@@ -1,0 +1,7 @@
+# 三角洲游戏助手 - 基础依赖
+PySide6>=6.4.0
+keyboard>=0.13.5
+
+# AI问答模块选配依赖（可选）
+chromadb>=0.4.0
+sentence-transformers>=2.2.0
