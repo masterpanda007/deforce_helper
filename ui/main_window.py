@@ -48,8 +48,10 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
         self.crosshair_window = None
         self.notification_window = None
         self.upload_blocked = False
+        self.download_blocked = False
         self.crosshair_blocking = False
         self.upload_blocking = False
+        self.download_blocking = False
         self.init_ui()
         self.create_crosshair()
         self.create_notification()
@@ -69,6 +71,9 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
                             self.toggle_crosshair_hotkey()
                         elif msg.wParam == 2:
                             print('触发 F10 热键')
+                            self.toggle_download_block()
+                        elif msg.wParam == 3:
+                            print('触发 F11 热键')
                             self.toggle_upload_block()
             except Exception as e:
                 print(f'处理热键事件时出错: {e}')
@@ -120,8 +125,8 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
         size_layout = QHBoxLayout()
         size_layout.addWidget(QLabel('准星大小:'))
         self.size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.size_slider.setMinimum(10)
-        self.size_slider.setMaximum(50)
+        self.size_slider.setMinimum(1)
+        self.size_slider.setMaximum(30)
         self.size_slider.setValue(self.config['crosshair']['size'])
         self.size_slider.valueChanged.connect(self.update_crosshair_config)
         size_layout.addWidget(self.size_slider)
@@ -269,6 +274,13 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
             else:
                 print('注册 F10 全局热键失败')
             
+            # 注册 F11 热键 (ID=3)
+            result = user32.RegisterHotKey(hwnd, 3, 0, 0x7A)  # 0x7A 是 F11 的虚拟键码
+            if result:
+                print('注册 F11 全局热键成功')
+            else:
+                print('注册 F11 全局热键失败')
+            
             print('全局热键注册成功')
         except Exception as e:
             print(f'全局热键注册失败: {e}')
@@ -393,6 +405,45 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
             print('重置 upload_blocking 标志')
         threading.Thread(target=reset_blocking, daemon=True).start()
 
+    def toggle_download_block(self):
+        print('F11 热键被触发')
+        # 使用 QTimer 确保在主线程中执行 UI 操作
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(0, self._toggle_download_block_ui)
+
+    def _toggle_download_block_ui(self):
+        print('_toggle_download_block_ui 被调用')
+        # 防止快速连续触发
+        if hasattr(self, 'download_blocking') and self.download_blocking:
+            print('download_blocking 为 True，跳过')
+            return
+        print('download_blocking 为 False，执行操作')
+        self.download_blocking = True
+        
+        self.download_blocked = not self.download_blocked
+        print(f'新状态: {self.download_blocked}')
+        if self.download_blocked:
+            self.notification_window.show_message('⚠️ 已断下载')
+        else:
+            self.notification_window.show_message('✅ 恢复下载')
+        
+        # 异步执行网络操作
+        import threading
+        if self.download_blocked:
+            print('执行 block_network_download')
+            threading.Thread(target=self.block_network_download, daemon=True).start()
+        else:
+            print('执行 unblock_network_download')
+            threading.Thread(target=self.unblock_network_download, daemon=True).start()
+        
+        # 重置阻塞标志 - 使用线程
+        import time
+        def reset_blocking():
+            time.sleep(1)
+            self.download_blocking = False
+            print('重置 download_blocking 标志')
+        threading.Thread(target=reset_blocking, daemon=True).start()
+
     def block_network_upload(self):
         if platform.system() != 'Windows':
             print('断上传功能仅在 Windows 上可用')
@@ -409,25 +460,42 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
                 print(f'防火墙规则 {rule_name} 已存在，跳过添加')
                 return
             
-            # 添加防火墙规则 - 移除 remoteport 参数，因为 protocol=any 时不能指定端口
+            # 添加防火墙规则 - 阻断出站流量
             result = subprocess.run([
                 'netsh', 'advfirewall', 'firewall', 'add', 'rule',
                 f'name="{rule_name}"',
                 'dir=out',
                 'action=block',
-                'protocol=any',
+                'protocol=TCP',
                 'remoteip=any',
                 'profile=any'
             ], shell=True, capture_output=True, text=True)
             
             if result.returncode == 0:
-                print(f'防火墙规则 {rule_name} 添加成功')
+                print(f'防火墙规则 {rule_name} (TCP) 添加成功')
             else:
-                # 优先使用标准输出中的错误信息
                 error_msg = result.stdout if result.stdout else result.stderr
-                print(f'防火墙规则添加失败: {error_msg}')
+                print(f'防火墙规则 (TCP) 添加失败: {error_msg}')
                 if '请求的操作需要提升' in error_msg or 'access is denied' in error_msg.lower():
                     print('提示：请以管理员权限运行程序以使用断上传功能')
+            
+            # 添加UDP规则
+            result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'add', 'rule',
+                f'name="{rule_name}_UDP"',
+                'dir=out',
+                'action=block',
+                'protocol=UDP',
+                'remoteip=any',
+                'profile=any'
+            ], shell=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f'防火墙规则 {rule_name}_UDP 添加成功')
+            else:
+                error_msg = result.stdout if result.stdout else result.stderr
+                print(f'防火墙规则 (UDP) 添加失败: {error_msg}')
+                
         except Exception as e:
             print(f'防火墙规则添加失败: {e}')
 
@@ -436,28 +504,149 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
             return
         try:
             rule_name = 'DeltaHelper_BlockUpload'
-            # 先检查规则是否存在
+            rule_name_udp = 'DeltaHelper_BlockUpload_UDP'
+            
+            # 删除TCP规则
             check_result = subprocess.run([
                 'netsh', 'advfirewall', 'firewall', 'show', 'rule',
                 f'name="{rule_name}"'
             ], shell=True, capture_output=True, text=True)
             
-            if check_result.returncode != 0:
+            if check_result.returncode == 0:
+                result = subprocess.run([
+                    'netsh', 'advfirewall', 'firewall', 'delete', 'rule',
+                    f'name="{rule_name}"'
+                ], shell=True, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print(f'防火墙规则 {rule_name} 删除成功')
+                else:
+                    print(f'防火墙规则 {rule_name} 删除失败: {result.stderr}')
+            else:
                 print(f'防火墙规则 {rule_name} 不存在，跳过删除')
-                return
             
-            # 删除防火墙规则
-            result = subprocess.run([
-                'netsh', 'advfirewall', 'firewall', 'delete', 'rule',
+            # 删除UDP规则
+            check_result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'show', 'rule',
+                f'name="{rule_name_udp}"'
+            ], shell=True, capture_output=True, text=True)
+            
+            if check_result.returncode == 0:
+                result = subprocess.run([
+                    'netsh', 'advfirewall', 'firewall', 'delete', 'rule',
+                    f'name="{rule_name_udp}"'
+                ], shell=True, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print(f'防火墙规则 {rule_name_udp} 删除成功')
+                else:
+                    print(f'防火墙规则 {rule_name_udp} 删除失败: {result.stderr}')
+            else:
+                print(f'防火墙规则 {rule_name_udp} 不存在，跳过删除')
+                
+        except Exception as e:
+            print(f'防火墙规则删除失败: {e}')
+
+    def block_network_download(self):
+        if platform.system() != 'Windows':
+            print('断下载功能仅在 Windows 上可用')
+            return
+        try:
+            rule_name = 'DeltaHelper_BlockDownload'
+            # 先检查规则是否已经存在
+            check_result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'show', 'rule',
                 f'name="{rule_name}"'
             ], shell=True, capture_output=True, text=True)
             
+            if check_result.returncode == 0:
+                print(f'防火墙规则 {rule_name} 已存在，跳过添加')
+                return
+            
+            # 添加防火墙规则 - 阻断入站流量
+            result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'add', 'rule',
+                f'name="{rule_name}"',
+                'dir=in',
+                'action=block',
+                'protocol=TCP',
+                'remoteip=any',
+                'profile=any'
+            ], shell=True, capture_output=True, text=True)
+            
             if result.returncode == 0:
-                print(f'防火墙规则 {rule_name} 删除成功')
+                print(f'防火墙规则 {rule_name} (TCP) 添加成功')
             else:
-                print(f'防火墙规则删除失败: {result.stderr}')
-                if '请求的操作需要提升' in result.stderr or 'access is denied' in result.stderr.lower():
-                    print('提示：请以管理员权限运行程序以使用断上传功能')
+                error_msg = result.stdout if result.stdout else result.stderr
+                print(f'防火墙规则 (TCP) 添加失败: {error_msg}')
+                if '请求的操作需要提升' in error_msg or 'access is denied' in error_msg.lower():
+                    print('提示：请以管理员权限运行程序以使用断下载功能')
+            
+            # 添加UDP规则
+            result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'add', 'rule',
+                f'name="{rule_name}_UDP"',
+                'dir=in',
+                'action=block',
+                'protocol=UDP',
+                'remoteip=any',
+                'profile=any'
+            ], shell=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f'防火墙规则 {rule_name}_UDP 添加成功')
+            else:
+                error_msg = result.stdout if result.stdout else result.stderr
+                print(f'防火墙规则 (UDP) 添加失败: {error_msg}')
+                
+        except Exception as e:
+            print(f'防火墙规则添加失败: {e}')
+
+    def unblock_network_download(self):
+        if platform.system() != 'Windows':
+            return
+        try:
+            rule_name = 'DeltaHelper_BlockDownload'
+            rule_name_udp = 'DeltaHelper_BlockDownload_UDP'
+            
+            # 删除TCP规则
+            check_result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'show', 'rule',
+                f'name="{rule_name}"'
+            ], shell=True, capture_output=True, text=True)
+            
+            if check_result.returncode == 0:
+                result = subprocess.run([
+                    'netsh', 'advfirewall', 'firewall', 'delete', 'rule',
+                    f'name="{rule_name}"'
+                ], shell=True, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print(f'防火墙规则 {rule_name} 删除成功')
+                else:
+                    print(f'防火墙规则 {rule_name} 删除失败: {result.stderr}')
+            else:
+                print(f'防火墙规则 {rule_name} 不存在，跳过删除')
+            
+            # 删除UDP规则
+            check_result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'show', 'rule',
+                f'name="{rule_name_udp}"'
+            ], shell=True, capture_output=True, text=True)
+            
+            if check_result.returncode == 0:
+                result = subprocess.run([
+                    'netsh', 'advfirewall', 'firewall', 'delete', 'rule',
+                    f'name="{rule_name_udp}"'
+                ], shell=True, capture_output=True, text=True)
+                
+                if result.returncode == 0:
+                    print(f'防火墙规则 {rule_name_udp} 删除成功')
+                else:
+                    print(f'防火墙规则 {rule_name_udp} 删除失败: {result.stderr}')
+            else:
+                print(f'防火墙规则 {rule_name_udp} 不存在，跳过删除')
+                
         except Exception as e:
             print(f'防火墙规则删除失败: {e}')
 
@@ -481,6 +670,7 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
         if self.notification_window:
             self.notification_window.close()
         self.unblock_network_upload()
+        self.unblock_network_download()
         
         # 注销全局热键
         if KEYBOARD_AVAILABLE:
@@ -488,6 +678,7 @@ class MainWindow(QMainWindow, QAbstractNativeEventFilter):
                 hwnd = int(self.winId())
                 user32.UnregisterHotKey(hwnd, 1)
                 user32.UnregisterHotKey(hwnd, 2)
+                user32.UnregisterHotKey(hwnd, 3)
                 print('全局热键已注销')
             except Exception as e:
                 print(f'注销全局热键失败: {e}')

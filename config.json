@@ -1,11 +1,11 @@
 {
     "crosshair": {
-        "enabled": true,
+        "enabled": false,
         "color": "#FF0000",
-        "size": 10,
+        "size": 1,
         "glow_enabled": true,
         "glow_color": "#FF0000",
-        "glow_radius": 3
+        "glow_radius": 2
     },
     "upload_block": {
         "enabled": false,
