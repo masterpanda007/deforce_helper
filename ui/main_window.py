@@ -357,16 +357,35 @@ class MainWindow(QMainWindow):
             return
         try:
             rule_name = 'DeltaHelper_BlockUpload'
-            subprocess.run([
+            # 先检查规则是否已经存在
+            check_result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'show', 'rule',
+                f'name="{rule_name}"'
+            ], shell=True, capture_output=True, text=True)
+            
+            if check_result.returncode == 0:
+                print(f'防火墙规则 {rule_name} 已存在，跳过添加')
+                return
+            
+            # 添加防火墙规则 - 移除 remoteport 参数，因为 protocol=any 时不能指定端口
+            result = subprocess.run([
                 'netsh', 'advfirewall', 'firewall', 'add', 'rule',
-                f'name={rule_name}',
+                f'name="{rule_name}"',
                 'dir=out',
                 'action=block',
                 'protocol=any',
                 'remoteip=any',
-                'remoteport=any',
                 'profile=any'
-            ], shell=True, check=True, capture_output=True)
+            ], shell=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f'防火墙规则 {rule_name} 添加成功')
+            else:
+                # 优先使用标准输出中的错误信息
+                error_msg = result.stdout if result.stdout else result.stderr
+                print(f'防火墙规则添加失败: {error_msg}')
+                if '请求的操作需要提升' in error_msg or 'access is denied' in error_msg.lower():
+                    print('提示：请以管理员权限运行程序以使用断上传功能')
         except Exception as e:
             print(f'防火墙规则添加失败: {e}')
 
@@ -375,10 +394,28 @@ class MainWindow(QMainWindow):
             return
         try:
             rule_name = 'DeltaHelper_BlockUpload'
-            subprocess.run([
+            # 先检查规则是否存在
+            check_result = subprocess.run([
+                'netsh', 'advfirewall', 'firewall', 'show', 'rule',
+                f'name="{rule_name}"'
+            ], shell=True, capture_output=True, text=True)
+            
+            if check_result.returncode != 0:
+                print(f'防火墙规则 {rule_name} 不存在，跳过删除')
+                return
+            
+            # 删除防火墙规则
+            result = subprocess.run([
                 'netsh', 'advfirewall', 'firewall', 'delete', 'rule',
-                f'name={rule_name}'
-            ], shell=True, check=True, capture_output=True)
+                f'name="{rule_name}"'
+            ], shell=True, capture_output=True, text=True)
+            
+            if result.returncode == 0:
+                print(f'防火墙规则 {rule_name} 删除成功')
+            else:
+                print(f'防火墙规则删除失败: {result.stderr}')
+                if '请求的操作需要提升' in result.stderr or 'access is denied' in result.stderr.lower():
+                    print('提示：请以管理员权限运行程序以使用断上传功能')
         except Exception as e:
             print(f'防火墙规则删除失败: {e}')
 
