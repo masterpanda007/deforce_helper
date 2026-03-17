@@ -7,24 +7,40 @@
 import subprocess
 import sys
 import platform
+import ctypes
+from ctypes import wintypes
 
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QLabel, QPushButton,
     QColorDialog, QSlider, QCheckBox, QGroupBox, QTextEdit, QLineEdit,
     QComboBox, QMessageBox
 )
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QAbstractNativeEventFilter
 from PySide6.QtGui import QColor
 
-# 使用 PySide6 的 QShortcut 注册热键
-KEYBOARD_AVAILABLE = True
+# 使用 Windows API 注册全局热键
+KEYBOARD_AVAILABLE = platform.system() == 'Windows'
+
+# Windows API 常量
+MOD_ALT = 0x0001
+MOD_CONTROL = 0x0002
+MOD_SHIFT = 0x0004
+MOD_WIN = 0x0008
+WM_HOTKEY = 0x0312
+
+# Windows API 函数
+user32 = ctypes.windll.user32
+user32.RegisterHotKey.restype = wintypes.BOOL
+user32.RegisterHotKey.argtypes = [wintypes.HWND, wintypes.INT, wintypes.UINT, wintypes.UINT]
+user32.UnregisterHotKey.restype = wintypes.BOOL
+user32.UnregisterHotKey.argtypes = [wintypes.HWND, wintypes.INT]
 
 from config import load_config, save_config, load_skills
 from widgets import CrosshairWindow, NotificationWindow
 from ui.tabs import create_promotion_bar, add_skill_card
 
 
-class MainWindow(QMainWindow):
+class MainWindow(QMainWindow, QAbstractNativeEventFilter):
     def __init__(self):
         super().__init__()
         self.config = load_config()
@@ -32,10 +48,31 @@ class MainWindow(QMainWindow):
         self.crosshair_window = None
         self.notification_window = None
         self.upload_blocked = False
+        self.crosshair_blocking = False
+        self.upload_blocking = False
         self.init_ui()
-        self.init_hotkeys()
         self.create_crosshair()
         self.create_notification()
+        self.init_hotkeys()
+        
+    def nativeEvent(self, eventType, message):
+        if eventType == "windows_generic_MSG":
+            try:
+                from shiboken6 import VoidPtr
+                if isinstance(message, VoidPtr):
+                    msg_ptr = int(message)
+                    msg = ctypes.cast(msg_ptr, ctypes.POINTER(wintypes.MSG)).contents
+                    if msg.message == WM_HOTKEY:
+                        print(f'收到全局热键事件，ID: {msg.wParam}')
+                        if msg.wParam == 1:
+                            print('触发 F9 热键')
+                            self.toggle_crosshair_hotkey()
+                        elif msg.wParam == 2:
+                            print('触发 F10 热键')
+                            self.toggle_upload_block()
+            except Exception as e:
+                print(f'处理热键事件时出错: {e}')
+        return super().nativeEvent(eventType, message)
 
     def init_ui(self):
         self.setWindowTitle('三角洲游戏助手 - 小麻虾电竞')
@@ -215,21 +252,26 @@ class MainWindow(QMainWindow):
             print('快捷键功能仅在 Windows 上可用')
             return
         try:
-            from PySide6.QtGui import QShortcut, QKeySequence
+            # 获取窗口句柄
+            hwnd = int(self.winId())
             
-            # 注册 F9 热键
-            crosshair_shortcut = QShortcut(QKeySequence('F9'), self)
-            crosshair_shortcut.activated.connect(self.toggle_crosshair_hotkey)
-            print('注册 F9 热键成功')
+            # 注册 F9 热键 (ID=1)
+            result = user32.RegisterHotKey(hwnd, 1, 0, 0x78)  # 0x78 是 F9 的虚拟键码
+            if result:
+                print('注册 F9 全局热键成功')
+            else:
+                print('注册 F9 全局热键失败')
             
-            # 注册 F10 热键
-            block_shortcut = QShortcut(QKeySequence('F10'), self)
-            block_shortcut.activated.connect(self.toggle_upload_block)
-            print('注册 F10 热键成功')
+            # 注册 F10 热键 (ID=2)
+            result = user32.RegisterHotKey(hwnd, 2, 0, 0x79)  # 0x79 是 F10 的虚拟键码
+            if result:
+                print('注册 F10 全局热键成功')
+            else:
+                print('注册 F10 全局热键失败')
             
-            print('热键注册成功')
+            print('全局热键注册成功')
         except Exception as e:
-            print(f'快捷键注册失败: {e}')
+            print(f'全局热键注册失败: {e}')
 
     def create_crosshair(self):
         self.crosshair_window = CrosshairWindow(self.config)
@@ -439,4 +481,15 @@ class MainWindow(QMainWindow):
         if self.notification_window:
             self.notification_window.close()
         self.unblock_network_upload()
+        
+        # 注销全局热键
+        if KEYBOARD_AVAILABLE:
+            try:
+                hwnd = int(self.winId())
+                user32.UnregisterHotKey(hwnd, 1)
+                user32.UnregisterHotKey(hwnd, 2)
+                print('全局热键已注销')
+            except Exception as e:
+                print(f'注销全局热键失败: {e}')
+        
         event.accept()
